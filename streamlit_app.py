@@ -110,34 +110,40 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-CORRECT_PIN = "1919"
+# Streamlit Cloud의 Secrets(비밀 금고)에 PIN이 등록되어 있으면 해당 값을 사용하고,
+# 등록되어 있지 않으면 기본값 "1919"를 사용합니다.
+try:
+    CORRECT_PIN = str(st.secrets.get("PIN", "1919"))
+except Exception:
+    CORRECT_PIN = "1919"
 
 # 3. 로컬스토리지 브릿지 JavaScript (PIN 번호 및 날짜 저장/복원)
 # URL 파라미터가 비어있을 때 브라우저 localStorage를 확인하여 자동 로그인 및 날짜 복원
-components.html("""
+components.html(f"""
 <script>
-    (function() {
+    (function() {{
+        const correctPin = "{CORRECT_PIN}";
         const url = new URL(window.parent.location.href);
         const storedPin = localStorage.getItem('camping_auth_pin');
         const storedDate = localStorage.getItem('camping_target_date');
         let shouldReload = false;
 
         // 1. PIN 복원
-        if (storedPin === '1919' && url.searchParams.get('pin') !== '1919') {
+        if (storedPin === correctPin && url.searchParams.get('pin') !== correctPin) {{
             url.searchParams.set('pin', storedPin);
             shouldReload = true;
-        }
+        }}
 
         // 2. 날짜 복원
-        if (storedDate && !url.searchParams.get('date')) {
+        if (storedDate && !url.searchParams.get('date')) {{
             url.searchParams.set('date', storedDate);
             shouldReload = true;
-        }
+        }}
 
-        if (shouldReload) {
+        if (shouldReload) {{
             window.parent.location.replace(url.href);
-        }
-    })();
+        }}
+    }})();
 </script>
 """, height=0)
 
@@ -149,7 +155,7 @@ if not is_authenticated:
     st.markdown("### 🔒 보안 인증")
     st.caption("비인가 접근을 방지하기 위해 PIN 번호를 입력해주세요.")
     
-    pin_input = st.text_input("PIN 번호 (4자리)", type="password", max_chars=4, placeholder="숫자 입력")
+    pin_input = st.text_input("PIN 번호", type="password", max_chars=8, placeholder="비밀번호 입력")
     
     if st.button("확인", type="primary"):
         if pin_input == CORRECT_PIN:
@@ -157,9 +163,9 @@ if not is_authenticated:
             st.query_params["pin"] = CORRECT_PIN
             
             # 브라우저 localStorage에 PIN 저장 (다음 방문 시 자동 패스)
-            components.html("""
+            components.html(f"""
             <script>
-                localStorage.setItem('camping_auth_pin', '1919');
+                localStorage.setItem('camping_auth_pin', '{CORRECT_PIN}');
             </script>
             """, height=0)
             
