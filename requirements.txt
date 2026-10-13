@@ -1,0 +1,8 @@
+# 네이버 캠핑장 예약 봇 필수 및 선택 라이브러리
+# 기본 모니터링 봇(monitor_bot.py)은 파이썬 표준 라이브러리(urllib, json, winsound 등)만으로 동작하여 별도 설치 없이 즉시 실행 가능합니다.
+
+# 브라우저 자동 클릭 매크로(browser_macro.py) 사용 시 필요:
+selenium>=4.15.0
+
+# Streamlit 웹 앱(streamlit_app.py) 및 Streamlit Cloud 배포 시 필요:
+streamlit>=1.30.0
