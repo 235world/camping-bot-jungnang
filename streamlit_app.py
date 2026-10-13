@@ -254,7 +254,7 @@ else:
         default_date = TODAY_KST
 
 # 달력 날짜 선택기 (min_value=TODAY_KST: 과거 날짜 선택 방지, default_date >= TODAY_KST 로 StreamlitValueBelowMinError 방지)
-selected_date = st.date_input("📅 날짜 선택", value=default_date, min_value=TODAY_KST)
+selected_date = st.date_input("날짜 선택", value=default_date, min_value=TODAY_KST)
 selected_date_str = selected_date.strftime("%Y-%m-%d")
 
 # 날짜 변경 시 URL 파라미터 및 localStorage 동기화
@@ -266,7 +266,7 @@ if st.query_params.get("date") != selected_date_str:
     </script>
     """, height=0)
 
-st.write(f"👉 **선택된 날짜:** `{selected_date_str}`")
+st.write(f"**선택한 날짜:** `{selected_date_str}`")
 
 # ====================================================================
 # 공유 캐시 및 데이터 조회 모듈 (8~20명 동시 접속 시 네이버 IP 차단 완벽 방지)
@@ -394,7 +394,7 @@ is_monitoring = st.session_state["auto_monitor"]
 col_btn1, col_btn2 = st.columns(2)
 
 with col_btn1:
-    btn_single = st.button("🔍 1회 즉시 조회", use_container_width=True, disabled=is_monitoring)
+    btn_single = st.button("즉시 조회", use_container_width=True, disabled=is_monitoring)
 
 with col_btn2:
     if not is_monitoring:
