@@ -5,10 +5,12 @@
 # 1. 대상 캠핑장 정보
 BUSINESS_ID = "387475"          # 중랑캠핑숲 네이버 예약 비즈니스 ID
 BUSINESS_TYPE_ID = 5            # 네이버 예약 카테고리 타입
+from datetime import datetime, timezone, timedelta
 
 # 2. 예약 목표 날짜 (YYYY-MM-DD 형식)
-# ※ 현재 운영 중인 시즌 연도(예: 2026-10-09)를 지정합니다.
-TARGET_DATE = "2026-10-09"
+# 기본값은 항상 오늘 날짜(한국 시간 KST 기준)로 설정됩니다.
+KST = timezone(timedelta(hours=9))
+TARGET_DATE = datetime.now(KST).strftime("%Y-%m-%d")
 
 # 3. 객실 필터링 키워드
 # 이름에 이 키워드가 포함된 객실만 감시합니다.

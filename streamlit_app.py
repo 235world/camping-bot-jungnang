@@ -12,7 +12,7 @@
 """
 
 import urllib.parse
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import streamlit as st
 import streamlit.components.v1 as components
 import config
@@ -132,8 +132,28 @@ components.html(f"""
         const correctPin = "{CORRECT_PIN}";
         const url = new URL(window.parent.location.href);
         const storedPin = localStorage.getItem('camping_auth_pin');
-        const storedDate = localStorage.getItem('camping_target_date');
+        let storedDate = localStorage.getItem('camping_target_date');
         let shouldReload = false;
+
+        // 오늘 날짜 계산 (한국 시간 KST 기준)
+        const now = new Date();
+        const kstOffset = 9 * 60;
+        const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+        const kst = new Date(utc + (kstOffset * 60000));
+        const yyyy = kst.getFullYear();
+        const mm = String(kst.getMonth() + 1).padStart(2, '0');
+        const dd = String(kst.getDate()).padStart(2, '0');
+        const todayStr = `${yyyy}-${mm}-${dd}`;
+
+        // 과거 날짜이거나 이전 설정값인 경우 오늘 날짜로 갱신
+        if (storedDate && storedDate < todayStr) {{
+            storedDate = todayStr;
+            localStorage.setItem('camping_target_date', todayStr);
+            if (url.searchParams.get('date')) {{
+                url.searchParams.set('date', todayStr);
+                shouldReload = true;
+            }}
+        }}
 
         // 1. PIN 복원
         if (storedPin === correctPin && url.searchParams.get('pin') !== correctPin) {{
@@ -141,7 +161,7 @@ components.html(f"""
             shouldReload = true;
         }}
 
-        // 2. 날짜 복원
+        // 2. 날짜 복원 (오늘 이후 날짜인 경우만 복원)
         if (storedDate && !url.searchParams.get('date')) {{
             url.searchParams.set('date', storedDate);
             shouldReload = true;
@@ -189,15 +209,23 @@ if not is_authenticated:
 # 헤더
 st.markdown("## 중랑캠핑숲 조회")
 
-# 5. 날짜 선택 로직 (로컬스토리지 / URL 기억 연동)
-saved_date_str = st.query_params.get("date", config.TARGET_DATE)
-try:
-    default_date = datetime.strptime(saved_date_str, "%Y-%m-%d").date()
-except Exception:
-    default_date = datetime.now().date()
+# 5. 날짜 선택 로직 (오늘 날짜 KST 기준 기본값)
+KST = timezone(timedelta(hours=9))
+today_kst = datetime.now(KST).date()
 
-# 달력 날짜 선택기 (min_value를 지정하지 않아 과거/미래 날짜 오류 StreamlitValueBelowMinError 방지)
-selected_date = st.date_input("📅 날짜 선택", value=default_date)
+saved_date_str = st.query_params.get("date")
+if not saved_date_str:
+    default_date = today_kst
+else:
+    try:
+        parsed_date = datetime.strptime(saved_date_str, "%Y-%m-%d").date()
+        # 과거 날짜인 경우 오늘 날짜로 자동 보정
+        default_date = max(parsed_date, today_kst)
+    except Exception:
+        default_date = today_kst
+
+# 달력 날짜 선택기 (min_value=today_kst: 과거 날짜 선택 방지, default_date >= today_kst 로 StreamlitValueBelowMinError 방지)
+selected_date = st.date_input("📅 날짜 선택", value=default_date, min_value=today_kst)
 selected_date_str = selected_date.strftime("%Y-%m-%d")
 
 # 날짜 변경 시 URL 파라미터 및 localStorage 동기화
