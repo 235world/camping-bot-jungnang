@@ -12,6 +12,7 @@
 """
 
 import hashlib
+import random
 import time
 import urllib.parse
 from datetime import datetime, timedelta, timezone
@@ -273,12 +274,12 @@ st.write(f"👉 **선택된 날짜:** `{selected_date_str}`")
 _CACHE_LOCK = Lock()
 _FETCH_LOCK = Lock()
 _SHARED_CACHE = {}  # {date_str: {"timestamp": float, "results": list}}
-CACHE_TTL = 3.0     # 3초 동안 최신 결과 공유
+CACHE_TTL = 20.0    # 20초 동안 최신 결과 공유
 
 def fetch_campsite_status_shared(date_str: str):
     """
     공유 캐시 기능:
-    - 최근 3초 이내에 누군가 조회한 결과가 있으면 해당 결과를 즉시 공유 (외부 요청 0회)
+    - 최근 20초 이내에 누군가 조회한 결과가 있으면 해당 결과를 즉시 공유 (외부 요청 0회)
     - 캐시 만료 시 단 1개의 스레드만 네이버 조회를 수행하고, 동시 요청자는 그 결과를 공유
     - 반환값: (results, is_shared_cache, timestamp_str)
     """
@@ -463,8 +464,17 @@ if is_monitoring:
         st.session_state["auto_monitor"] = False
         st.stop()
     else:
-        # 결과를 모두 가져온 뒤 1초 대기 후 자동 재실행
-        time.sleep(1.0)
+        # 결과를 모두 가져온 뒤 30초~70초 사이 랜덤 대기 후 다음 자동 실행
+        wait_seconds = random.randint(30, 70)
+        countdown_box = st.empty()
+        for remaining in range(wait_seconds, 0, -1):
+            countdown_box.markdown(
+                f"<div style='font-size:0.88rem; color:#475569; background:#f1f5f9; border:1px solid #cbd5e1; padding:8px 12px; border-radius:10px; text-align:center; margin-top:12px;'>"
+                f"다음 자동 조회까지 약 <b>{remaining}초</b> 대기 중</div>",
+                unsafe_allow_html=True
+            )
+            time.sleep(1.0)
+        countdown_box.empty()
         st.rerun()
 
 elif st.session_state.get("last_results"):
