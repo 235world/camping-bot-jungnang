@@ -12,8 +12,11 @@
 """
 
 import hashlib
+import time
 import urllib.parse
 from datetime import datetime, timedelta, timezone
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
 import streamlit as st
 import streamlit.components.v1 as components
 import config
@@ -264,81 +267,213 @@ if st.query_params.get("date") != selected_date_str:
 
 st.write(f"👉 **선택된 날짜:** `{selected_date_str}`")
 
-# 6. 현황 조회 버튼
-if st.button("🔍 실시간 예약 현황 조회하기", type="primary", use_container_width=True):
-    with st.spinner("네이버 예약 실시간 재고 확인 중..."):
-        sites = get_campsite_items(config.BUSINESS_ID, config.FILTER_KEYWORD)
+# ====================================================================
+# 공유 캐시 및 데이터 조회 모듈 (8~20명 동시 접속 시 네이버 IP 차단 완벽 방지)
+# ====================================================================
+_CACHE_LOCK = Lock()
+_FETCH_LOCK = Lock()
+_SHARED_CACHE = {}  # {date_str: {"timestamp": float, "results": list}}
+CACHE_TTL = 3.0     # 3초 동안 최신 결과 공유
+
+def fetch_campsite_status_shared(date_str: str):
+    """
+    공유 캐시 기능:
+    - 최근 3초 이내에 누군가 조회한 결과가 있으면 해당 결과를 즉시 공유 (외부 요청 0회)
+    - 캐시 만료 시 단 1개의 스레드만 네이버 조회를 수행하고, 동시 요청자는 그 결과를 공유
+    - 반환값: (results, is_shared_cache, timestamp_str)
+    """
+    now = time.time()
+    
+    # 1. 기존 캐시 확인
+    with _CACHE_LOCK:
+        if date_str in _SHARED_CACHE:
+            cached = _SHARED_CACHE[date_str]
+            if now - cached["timestamp"] < CACHE_TTL:
+                ts_str = time.strftime("%H:%M:%S", time.localtime(cached["timestamp"]))
+                return cached["results"], True, ts_str
+
+    # 2. 캐시 만료 시 조회 (FETCH_LOCK으로 단 1개의 스레드만 실제 조회 수행)
+    with _FETCH_LOCK:
+        # 더블 체크 락킹
+        now = time.time()
+        with _CACHE_LOCK:
+            if date_str in _SHARED_CACHE:
+                cached = _SHARED_CACHE[date_str]
+                if now - cached["timestamp"] < CACHE_TTL:
+                    ts_str = time.strftime("%H:%M:%S", time.localtime(cached["timestamp"]))
+                    return cached["results"], True, ts_str
         
+        # 실제 네이버 조회 수행
+        sites = get_campsite_items(config.BUSINESS_ID, config.FILTER_KEYWORD)
         if not sites:
-            st.error("사이트 목록을 가져오지 못했습니다.")
-        else:
-            results = []
-            progress_bar = st.progress(0)
-            
-            for idx, s in enumerate(sites):
-                res = check_date_availability(
-                    config.BUSINESS_ID,
-                    s["bizItemId"],
-                    selected_date_str,
-                    config.BUSINESS_TYPE_ID
-                )
-                
-                if res and res.get("dateKey"):
-                    stock = res.get("stock", 0)
-                    booked = res.get("bookingCount", 0)
-                    remain = res.get("remaining", 0)
-                    avail = res.get("isAvailable", False)
-                else:
-                    stock, booked, remain, avail = 0, 0, 0, False
-
-                results.append({
-                    "id": s["bizItemId"],
-                    "name": s["name"],
-                    "stock": stock,
-                    "booked": booked,
-                    "remain": remain,
-                    "available": avail
-                })
-                progress_bar.progress((idx + 1) / len(sites))
-                
-            progress_bar.empty()
-            
-            available_sites = [r for r in results if r["available"]]
-            
-            if available_sites:
-                st.balloons()
-                st.success(f"🎉 **{selected_date_str}**에 예약 가능한 사이트가 **{len(available_sites)}개** 발견되었습니다!")
-                
-                for site in available_sites:
-                    # 네이버 모바일 웹 URL
-                    web_url = f"https://m.booking.naver.com/booking/{config.BUSINESS_TYPE_ID}/bizes/{config.BUSINESS_ID}/items/{site['id']}"
-                    
-                    # 네이버 앱 전용 딥링크 스킴 (네이버 앱이 즉시 실행되어 인앱 브라우저로 열림)
-                    app_deep_link = f"naversearchapp://inappbrowser?url={urllib.parse.quote(web_url, safe='')}&target=new&version=6"
-                    
-                    # 카드 UI 렌더링
-                    st.markdown(f"""
-                    <div class="site-card">
-                        <div class="site-title">{site['name']}</div>
-                        <div class="site-badge">잔여: {site['remain']}자리 (전체 {site['stock']} / 예약 {site['booked']})</div>
-                        <a href="{app_deep_link}" class="app-link-btn">🚀 네이버 앱으로 바로 예약하기</a>
-                        <a href="{web_url}" target="_blank" class="web-link-btn">🌐 웹 브라우저로 열기</a>
-                    </div>
-                    """, unsafe_allow_html=True)
+            return [], False, time.strftime("%H:%M:%S", time.localtime(now))
+        
+        def check_one(s):
+            res = check_date_availability(
+                config.BUSINESS_ID,
+                s["bizItemId"],
+                date_str,
+                config.BUSINESS_TYPE_ID
+            )
+            if res and res.get("dateKey"):
+                stock = res.get("stock", 0)
+                booked = res.get("bookingCount", 0)
+                remain = res.get("remaining", 0)
+                avail = res.get("isAvailable", False)
             else:
-                st.warning(f"🔒 **{selected_date_str}** 전 사이트 매진 상태입니다.")
+                stock, booked, remain, avail = 0, 0, 0, False
+            return {
+                "id": s["bizItemId"],
+                "name": s["name"],
+                "stock": stock,
+                "booked": booked,
+                "remain": remain,
+                "available": avail
+            }
 
-            # 전체 사이트 테이블 (접기/펼치기)
-            with st.expander(f"📋 전체 {len(results)}개 사이트 상세 현황 보기"):
-                table_data = []
-                for r in results:
-                    status = f"🔥 가능 ({r['remain']})" if r["available"] else "🔒 마감"
-                    table_data.append({
-                        "사이트명": r["name"],
-                        "수량(예약/전체)": f"{r['booked']}/{r['stock']}",
-                        "상태": status
-                    })
-                st.table(table_data)
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            results = list(executor.map(check_one, sites))
+        
+        finish_time = time.time()
+        ts_str = time.strftime("%H:%M:%S", time.localtime(finish_time))
+        
+        with _CACHE_LOCK:
+            _SHARED_CACHE[date_str] = {
+                "timestamp": finish_time,
+                "results": results
+            }
+            
+        return results, False, ts_str
+
+def render_results(results, target_date_str):
+    available_sites = [r for r in results if r["available"]]
+    
+    if available_sites:
+        st.success(f"🎉 **{target_date_str}**에 예약 가능한 사이트가 **{len(available_sites)}개** 발견되었습니다!")
+        
+        for site in available_sites:
+            web_url = f"https://m.booking.naver.com/booking/{config.BUSINESS_TYPE_ID}/bizes/{config.BUSINESS_ID}/items/{site['id']}"
+            app_deep_link = f"naversearchapp://inappbrowser?url={urllib.parse.quote(web_url, safe='')}&target=new&version=6"
+            
+            st.markdown(f"""
+            <div class="site-card">
+                <div class="site-title">{site['name']}</div>
+                <div class="site-badge">잔여: {site['remain']}자리 (전체 {site['stock']} / 예약 {site['booked']})</div>
+                <a href="{app_deep_link}" class="app-link-btn">🚀 네이버 앱으로 바로 예약하기</a>
+                <a href="{web_url}" target="_blank" class="web-link-btn">🌐 웹 브라우저로 열기</a>
+            </div>
+            """, unsafe_allow_html=True)
+    else:
+        st.warning(f"🔒 **{target_date_str}** 전 사이트 매진 상태입니다.")
+
+    with st.expander(f"📋 전체 {len(results)}개 사이트 상세 현황 보기"):
+        table_data = []
+        for r in results:
+            status = f"🔥 가능 ({r['remain']})" if r["available"] else "🔒 마감"
+            table_data.append({
+                "사이트명": r["name"],
+                "수량(예약/전체)": f"{r['booked']}/{r['stock']}",
+                "상태": status
+            })
+        st.table(table_data)
+
+# 세션 상태 초기화
+if "auto_monitor" not in st.session_state:
+    st.session_state["auto_monitor"] = False
+if "monitor_start_time" not in st.session_state:
+    st.session_state["monitor_start_time"] = 0
+if "monitor_logs" not in st.session_state:
+    st.session_state["monitor_logs"] = []
+if "last_results" not in st.session_state:
+    st.session_state["last_results"] = None
+
+is_monitoring = st.session_state["auto_monitor"]
+
+# 6. 조회 및 자동감시 버튼 영역
+col_btn1, col_btn2 = st.columns(2)
+
+with col_btn1:
+    btn_single = st.button("🔍 1회 즉시 조회", use_container_width=True, disabled=is_monitoring)
+
+with col_btn2:
+    if not is_monitoring:
+        btn_start_monitor = st.button("1시간 자동감시 시작", type="primary", use_container_width=True)
+        btn_stop_monitor = False
+    else:
+        btn_stop_monitor = st.button("자동감시 중지", type="secondary", use_container_width=True)
+        btn_start_monitor = False
+
+# 화면을 나가면 꺼진다는 안내 문구 (요청사항: 문구에 이모지 사용안함)
+st.markdown("<div style='font-size:0.83rem; color:#64748b; margin-top:2px; margin-bottom:14px; text-align:center;'>화면을 나가면 자동감시가 중단됩니다. (최대 1시간 동작)</div>", unsafe_allow_html=True)
+
+# 버튼 이벤트 처리
+if btn_start_monitor:
+    st.session_state["auto_monitor"] = True
+    st.session_state["monitor_start_time"] = time.time()
+    st.session_state["monitor_logs"] = []
+    st.rerun()
+
+if btn_stop_monitor:
+    st.session_state["auto_monitor"] = False
+    st.rerun()
+
+if btn_single:
+    with st.spinner("네이버 예약 실시간 재고 확인 중..."):
+        results, is_shared, ts_str = fetch_campsite_status_shared(selected_date_str)
+        st.session_state["last_results"] = (results, selected_date_str)
+        st.rerun()
+
+# 7. 실행 및 결과 렌더링
+if is_monitoring:
+    now_time = time.time()
+    start_time = st.session_state.get("monitor_start_time", now_time)
+    elapsed = now_time - start_time
+    
+    # 최대 1시간(3600초) 초과 시 자동 종료
+    if elapsed >= 3600:
+        st.session_state["auto_monitor"] = False
+        st.info("최대 감시 시간(1시간)이 경과하여 자동감시가 종료되었습니다.")
+        st.rerun()
+    
+    elapsed_m = int(elapsed // 60)
+    elapsed_s = int(elapsed % 60)
+    st.info(f"자동감시 진행 중 (경과: {elapsed_m:02d}분 {elapsed_s:02d}초 / 최대 60분)")
+    
+    # 1. 요청 결과를 다 가져온다 (공유 캐시 활용)
+    results, is_shared, ts_str = fetch_campsite_status_shared(selected_date_str)
+    st.session_state["last_results"] = (results, selected_date_str)
+    available_sites = [r for r in results if r["available"]]
+    
+    # 간단 호출 로그 기록
+    cache_badge = "공유 캐시" if is_shared else "신규 조회"
+    log_text = f"[{ts_str}] 잔여 {len(available_sites)}개 ({cache_badge})"
+    st.session_state["monitor_logs"].insert(0, log_text)
+    st.session_state["monitor_logs"] = st.session_state["monitor_logs"][:15]
+    
+    # 화면 렌더링
+    render_results(results, selected_date_str)
+    
+    # 하단 호출 로그 표시
+    if st.session_state["monitor_logs"]:
+        st.markdown("##### 자동감시 호출 기록")
+        st.code("\n".join(st.session_state["monitor_logs"]), language="text")
+        
+    # 잔여 객실 발견 시 자동감시 종료 (소리 기능 미사용)
+    if available_sites:
+        st.session_state["auto_monitor"] = False
+        st.stop()
+    else:
+        # 결과를 모두 가져온 뒤 1초 대기 후 자동 재실행
+        time.sleep(1.0)
+        st.rerun()
+
+elif st.session_state.get("last_results"):
+    results, r_date = st.session_state["last_results"]
+    render_results(results, r_date)
+    
+    if st.session_state.get("monitor_logs"):
+        st.markdown("##### 자동감시 호출 기록")
+        st.code("\n".join(st.session_state["monitor_logs"]), language="text")
 
 st.markdown("---")
 col_footer_left, col_footer_right = st.columns([2, 1])
