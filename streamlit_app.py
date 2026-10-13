@@ -20,8 +20,7 @@ from campsite_checker import get_campsite_items, check_date_availability
 
 # 1. 페이지 기본 설정 (모바일 친화적)
 st.set_page_config(
-    page_title="중랑캠핑숲 예약 조회기",
-    page_icon="🏕️",
+    page_title="중랑캠핑숲 조회",
     layout="centered",
     initial_sidebar_state="collapsed"
 )
@@ -29,10 +28,18 @@ st.set_page_config(
 # 2. 모바일 최적화 커스텀 CSS 주입
 st.markdown("""
 <style>
-    /* 상단 기본 메뉴 및 푸터 숨김 (앱 같은 느낌 연출) */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
+    /* 상단 기본 메뉴, 배포 버튼, 푸터 숨김 */
+    #MainMenu {visibility: hidden; display: none !important;}
+    footer {visibility: hidden; display: none !important;}
+    header {visibility: hidden; display: none !important;}
+    .stAppDeployButton {display: none !important;}
+    [data-testid="stDecoration"] {display: none !important;}
+    [data-testid="stStatusWidget"] {display: none !important;}
+    [data-testid="stToolbar"] {display: none !important;}
+    div[class*="viewerBadge"] {display: none !important;}
+    div[class*="ProfileBadge"] {display: none !important;}
+    .viewerBadge_container__1QSob, .viewerBadge_link__1S137 {display: none !important;}
+    [data-testid="manage-app-button"] {display: none !important;}
     
     /* 모바일 여백 최적화 */
     .block-container {
@@ -180,8 +187,7 @@ if not is_authenticated:
 # -------------------------------------------------------------
 
 # 헤더
-st.markdown("## 🏕️ 중랑캠핑숲 실시간 조회")
-st.caption("오토캠핑사이트 잔여석 탐색 & 네이버 앱 원클릭 예약")
+st.markdown("## 중랑캠핑숲 조회")
 
 # 5. 날짜 선택 로직 (로컬스토리지 / URL 기억 연동)
 saved_date_str = st.query_params.get("date", config.TARGET_DATE)
@@ -190,31 +196,8 @@ try:
 except Exception:
     default_date = datetime.now().date()
 
-today = datetime.now().date()
-
-# 퀵 날짜 계산
-this_saturday = today + timedelta(days=(5 - today.weekday()) % 7)
-next_saturday = this_saturday + timedelta(days=7)
-
-st.markdown("##### 📅 빠른 날짜 선택")
-c1, c2, c3 = st.columns(3)
-quick_chosen = None
-
-if c1.button("🎉 10월 9일\n(한글날)", use_container_width=True):
-    quick_chosen = datetime(today.year, 10, 9).date()
-
-if c2.button(f"이번주 토\n({this_saturday.strftime('%m/%d')})", use_container_width=True):
-    quick_chosen = this_saturday
-
-if c3.button(f"다음주 토\n({next_saturday.strftime('%m/%d')})", use_container_width=True):
-    quick_chosen = next_saturday
-
-if quick_chosen:
-    default_date = quick_chosen
-    st.query_params["date"] = quick_chosen.strftime("%Y-%m-%d")
-
-# 달력 날짜 선택기
-selected_date = st.date_input("직접 날짜 선택", value=default_date, min_value=today)
+# 달력 날짜 선택기 (min_value를 지정하지 않아 과거/미래 날짜 오류 StreamlitValueBelowMinError 방지)
+selected_date = st.date_input("📅 날짜 선택", value=default_date)
 selected_date_str = selected_date.strftime("%Y-%m-%d")
 
 # 날짜 변경 시 URL 파라미터 및 localStorage 동기화
