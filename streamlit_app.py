@@ -11,6 +11,7 @@
 ====================================================================
 """
 
+import hashlib
 import urllib.parse
 from datetime import datetime, timedelta, timezone
 import streamlit as st
@@ -129,17 +130,48 @@ try:
 except Exception:
     CORRECT_PIN = "1919"
 
-# 3. 로컬스토리지 브릿지 JavaScript (PIN 번호 및 날짜 저장/복원)
-# URL 파라미터가 비어있을 때 브라우저 localStorage를 확인하여 자동 로그인 및 날짜 복원
+# PIN 번호가 URL이나 스토리지에 평문 노출되지 않도록 고유 해시 토큰 생성
+AUTH_SALT = "camping_jungnang_auth_salt"
+AUTH_TOKEN = hashlib.sha256(f"{AUTH_SALT}:{CORRECT_PIN}".encode()).hexdigest()[:16]
+
+# 3. URL 파라미터 감지 및 정리
+# 3-1. 기존 URL에 남아있을 수 있는 ?pin= 파라미터 감지 시 세션 인증 후 즉시 URL에서 삭제
+if "pin" in st.query_params:
+    legacy_pin = st.query_params.get("pin")
+    if legacy_pin == CORRECT_PIN:
+        st.session_state["authenticated"] = True
+    del st.query_params["pin"]
+    st.rerun()
+
+# 3-2. 로컬스토리지 자동 로그인용 1회성 auth 토큰 처리 (검증 즉시 URL에서 삭제)
+if "auth" in st.query_params:
+    received_token = st.query_params.get("auth")
+    if received_token == AUTH_TOKEN:
+        st.session_state["authenticated"] = True
+    del st.query_params["auth"]
+    st.rerun()
+
+is_authenticated = st.session_state.get("authenticated", False)
+
+# 3-3. 로컬스토리지 브릿지 JavaScript (인증 토큰 및 날짜 복원)
 components.html(f"""
 <script>
     (function() {{
-        const correctPin = "{CORRECT_PIN}";
+        const authToken = "{AUTH_TOKEN}";
         const todayStr = "{TODAY_KST_STR}";
         const url = new URL(window.parent.location.href);
-        const storedPin = localStorage.getItem('camping_auth_pin');
+        const storedToken = localStorage.getItem('camping_auth_token');
+        const legacyPin = localStorage.getItem('camping_auth_pin');
         let storedDate = localStorage.getItem('camping_target_date');
         let shouldReload = false;
+
+        // 과거 로컬스토리지에 저장된 평문 PIN이 있다면 해시 토큰으로 마이그레이션 후 삭제
+        if (legacyPin) {{
+            if (legacyPin === "{CORRECT_PIN}") {{
+                localStorage.setItem('camping_auth_token', authToken);
+            }}
+            localStorage.removeItem('camping_auth_pin');
+        }}
 
         // 과거 날짜이거나 이전 설정값인 경우 오늘 날짜로 갱신
         if (storedDate && storedDate < todayStr) {{
@@ -151,13 +183,15 @@ components.html(f"""
             }}
         }}
 
-        // 1. PIN 복원
-        if (storedPin === correctPin && url.searchParams.get('pin') !== correctPin) {{
-            url.searchParams.set('pin', storedPin);
+        // 비인증 상태일 때 로컬스토리지 토큰이 유효하면 1회성 토큰 전달하여 자동 로그인
+        const isSessionAuth = {"true" if is_authenticated else "false"};
+        if (!isSessionAuth && storedToken === authToken && !url.searchParams.get('auth')) {{
+            url.searchParams.delete('pin');
+            url.searchParams.set('auth', authToken);
             shouldReload = true;
         }}
 
-        // 2. 날짜 복원 (오늘 이후 날짜인 경우만 복원)
+        // 날짜 복원
         if (storedDate && !url.searchParams.get('date')) {{
             url.searchParams.set('date', storedDate);
             shouldReload = true;
@@ -170,10 +204,7 @@ components.html(f"""
 </script>
 """, height=0)
 
-# 4. PIN 인증 확인
-url_pin = st.query_params.get("pin")
-is_authenticated = (url_pin == CORRECT_PIN) or st.session_state.get("authenticated", False)
-
+# 4. PIN 인증 확인 (인증되지 않은 경우에만 폼 표시)
 if not is_authenticated:
     st.markdown("### 🔒 보안 인증")
     st.caption("비인가 접근을 방지하기 위해 PIN 번호를 입력해주세요.")
@@ -183,12 +214,13 @@ if not is_authenticated:
     if st.button("확인", type="primary"):
         if pin_input == CORRECT_PIN:
             st.session_state["authenticated"] = True
-            st.query_params["pin"] = CORRECT_PIN
+            # ※ URL GET 파라미터에는 PIN 번호를 절대 넣지 않습니다!
             
-            # 브라우저 localStorage에 PIN 저장 (다음 방문 시 자동 패스)
+            # 브라우저 localStorage에 안전한 암호화 해시 토큰 저장 (다음 방문 시 자동 패스)
             components.html(f"""
             <script>
-                localStorage.setItem('camping_auth_pin', '{CORRECT_PIN}');
+                localStorage.setItem('camping_auth_token', '{AUTH_TOKEN}');
+                localStorage.removeItem('camping_auth_pin');
             </script>
             """, height=0)
             
@@ -318,6 +350,7 @@ with col_footer_right:
         st.session_state["authenticated"] = False
         components.html("""
         <script>
+            localStorage.removeItem('camping_auth_token');
             localStorage.removeItem('camping_auth_pin');
             localStorage.removeItem('camping_target_date');
             window.parent.location.replace(window.parent.location.origin + window.parent.location.pathname);
